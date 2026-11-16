@@ -10,50 +10,104 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
-      - name: Pobierz projekt
+      - name: Pobierz VILO
         uses: actions/checkout@v4
 
-      - name: Python
+      - name: Zainstaluj Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Node.js
+      - name: Zainstaluj Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Instalacja i budowanie
+      - name: Przygotuj backend VILO
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force backend/static | Out-Null
+
+          foreach ($file in @(
+            'server.py',
+            'backend_entry.py',
+            'requirements.txt'
+          )) {
+            if (!(Test-Path $file)) {
+              throw "Brakuje pliku: $file"
+            }
+            Copy-Item $file backend/
+          }
+
+          foreach ($file in @(
+            'index.html',
+            'style.css',
+            'app.js',
+            'favicon.png',
+            'vilo-icon.png'
+          )) {
+            if (!(Test-Path $file)) {
+              throw "Brakuje pliku: $file"
+            }
+            Copy-Item $file backend/static/
+          }
+
+      - name: Instalacja bibliotek Python
+        shell: pwsh
+        run: |
+          python -m pip install -r backend/requirements.txt
+          if ($LASTEXITCODE -ne 0) {
+            throw "Blad requirements"
+          }
+
+          python -m pip install pyinstaller
+          if ($LASTEXITCODE -ne 0) {
+            throw "Blad PyInstaller"
+          }
+
+      - name: Zbuduj serwer VILO
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onedir `
+            --windowed `
+            --name vilo-server `
+            --distpath backend-dist `
+            --collect-all uvicorn `
+            --collect-all fastapi `
+            --add-data "backend/static;static" `
+            --paths backend `
+            backend/backend_entry.py
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Blad budowania serwera"
+          }
+
+      - name: Zbuduj instalator Windows
         shell: pwsh
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
-          python -m pip install -r backend/requirements.txt
-          python -m pip install pyinstaller
-
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name vilo-server --distpath backend-dist --collect-all uvicorn --collect-all fastapi --add-data "backend/static;static" --paths backend backend/backend_entry.py
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Blad budowania backendu"
-          }
-
           npm install --no-audit --no-fund
-
           if ($LASTEXITCODE -ne 0) {
-            throw "Blad instalacji npm"
+            throw "Blad npm install"
           }
 
           npm run dist:win -- --publish never
-
           if ($LASTEXITCODE -ne 0) {
             throw "Blad budowania instalatora"
           }
 
-      - name: Pobierz instalator
+      - name: Udostepnij VILO
         uses: actions/upload-artifact@v4
         with:
           name: VILO-Windows-Instalator
           path: release/VILO-Setup-*.exe
           if-no-files-found: error
+          retention-days: 30
+
